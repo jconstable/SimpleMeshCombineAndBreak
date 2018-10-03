@@ -58,11 +58,23 @@ public class MeshCombine {
             var mf = newObject.AddComponent<MeshFilter>();
             mf.mesh = new Mesh();
             mf.sharedMesh.CombineMeshes(combine.ToArray(), false, true, false);
-
             var mr = newObject.AddComponent<MeshRenderer>();
             mr.materials = matList.ToArray();
+            mf.sharedMesh.RecalculateBounds();
 
-            foreach(var o in toDestroy)
+            var newCenter = mr.bounds.center;
+
+            var newVertices = mf.sharedMesh.vertices;
+            for( int i = 0; i < newVertices.Length; i++)
+            {
+                newVertices[i] -= newCenter;
+            }
+            mf.sharedMesh.vertices = newVertices;
+            mf.sharedMesh.RecalculateBounds();
+
+            newObject.transform.position = newCenter;
+
+            foreach (var o in toDestroy)
             {
                 GameObject.DestroyImmediate(o);
             }
