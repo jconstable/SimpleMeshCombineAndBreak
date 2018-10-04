@@ -8,6 +8,7 @@ public class MeshCombine {
     public static void DoCombine()
     {
         List<MeshFilter> meshes = new List<MeshFilter>();
+        List<GameObject> originalObjects = new List<GameObject>();
         foreach( var o in Selection.objects )
         {
             var go = o as GameObject;
@@ -16,15 +17,17 @@ public class MeshCombine {
                 Debug.LogError("Selected object is not a GameObject!");
                 return;
             }
-            var m = go.GetComponent<MeshFilter>();
-            if( m != null )
+            var filters = go.GetComponentsInChildren<MeshFilter>();
+            if( filters.Length > 0 )
             {
-                meshes.Add(m);
+                meshes.AddRange(filters);
             } else
             {
                 Debug.LogError("Selected object " + go.name + " does not have a MeshFilter!");
                 return;
             }
+
+            originalObjects.Add(go);
         }
 
         if( meshes.Count  >0)
@@ -51,10 +54,9 @@ public class MeshCombine {
                     }
                 }
                 names.Add(filter.gameObject.name);
-                filter.gameObject.SetActive(false);
             }
 
-            var newObject = new GameObject( string.Join(",", names.ToArray()) + " combined");
+            var newObject = new GameObject( "Combined: " + string.Join(",", names.ToArray()) );
             var mf = newObject.AddComponent<MeshFilter>();
             mf.mesh = new Mesh();
             mf.sharedMesh.CombineMeshes(combine.ToArray(), false, true, false);
@@ -73,6 +75,17 @@ public class MeshCombine {
             mf.sharedMesh.RecalculateBounds();
 
             newObject.transform.position = newCenter;
+
+            if( Selection.objects.Length == 1)
+            {
+                GameObject singleObject = Selection.objects[0] as GameObject;
+                newObject.transform.parent = singleObject.transform.parent;
+            }
+            
+            foreach( var o in originalObjects)
+            {
+                o.SetActive(false);
+            }
 
             foreach (var o in toDestroy)
             {
