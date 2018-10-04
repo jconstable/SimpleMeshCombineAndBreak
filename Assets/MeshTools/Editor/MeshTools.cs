@@ -1,14 +1,30 @@
-﻿using System.Collections;
+﻿// 2018 - John Constable
+// Use freely, but please send pull requests with enhancements!
+// https://github.com/jconstable/SimpleMeshCombineAndBreak
+
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 
 public class MeshCombine {
+    private class MaterialAndCombines
+    {
+        public Material mat;
+        public List<CombineInstance> list = new List<CombineInstance>();
+    }
+
+    private static string sLastFolderPath = "MESH_COMBINE_KEY_LAST_FOLDER_PATH";
+    private static string sLastFolderName = "MESH_COMBINE_KEY_LAST_FOLDER_NAME";
+
     [MenuItem("MeshTools/Combine")]
     public static void DoCombine()
     {
         List<MeshFilter> meshes = new List<MeshFilter>();
         List<GameObject> originalObjects = new List<GameObject>();
+
+        // Loop over all selected GameObjects
         foreach( var o in Selection.objects )
         {
             var go = o as GameObject;
@@ -17,6 +33,8 @@ public class MeshCombine {
                 Debug.LogError("Selected object is not a GameObject!");
                 return;
             }
+
+            // Collect the MeshFilters in each GameObject
             var filters = go.GetComponentsInChildren<MeshFilter>();
             if( filters.Length > 0 )
             {
@@ -29,79 +47,214 @@ public class MeshCombine {
 
             originalObjects.Add(go);
         }
-
+        
+        // Only run if we found MeshFilters from selection
         if( meshes.Count  >0)
         {
-            List<string> names = new List<string>();
-            List<Material> matList = new List<Material>();
-            List<CombineInstance> combine = new List<CombineInstance>();
-            List<GameObject> toDestroy = new List<GameObject>();
+            // Pick where these new assets will be put
+            string outputFolder = ChooseFolder(meshes[0].sharedMesh);
+            if (string.IsNullOrEmpty(outputFolder))
+                return;
 
+            // Data structure to store source information as we go
+            List<string> names = new List<string>();
+            List<GameObject> toDestroy = new List<GameObject>();
+            Dictionary<Material, MaterialAndCombines> combinesByMaterial = new Dictionary<Material, MaterialAndCombines>();
+
+            // Loop over all found MeshFilters
             for( int i = 0; i < meshes.Count; i++ )
             {
                 var filter = meshes[i];
 
+                // If there is only one submesh, no need to break apart first
                 if( filter.sharedMesh.subMeshCount == 1 )
                 {
-                    DoCombine(filter, matList, combine);
+                    DoCombine(filter, combinesByMaterial);
                 } else
                 {
+                    // We need to isolate all submeshes into discreet Mesh objects.
+                    // Use the BreakMeshIntoBits function to create temporary GameObjects with one mesh each
                     var newObjects = BreakMeshIntoBits(filter.gameObject);
                     foreach( var o in newObjects )
                     {
-                        DoCombine(o, matList, combine);
+                        DoCombine(o, combinesByMaterial);
+
+                        // We need to clean these temp object up later
                         toDestroy.Add(o.gameObject);
                     }
                 }
+
+                // Add the parent GO name, so we can add to the new GO's name later
                 names.Add(filter.gameObject.name);
             }
 
-            var newObject = new GameObject( "Combined: " + string.Join(",", names.ToArray()) );
+            // For each bucket, combine meshes of the same material into a single mesh
+            Dictionary<Material, Mesh> submeshes = new Dictionary<Material, Mesh>();
+            foreach( var pair in combinesByMaterial)
+            {
+                var mesh = new Mesh();
+                mesh.CombineMeshes(pair.Value.list.ToArray(), true, true, false); // 2nd arg means to actually "weld" meshes
+                submeshes[pair.Value.mat] = mesh;
+            }
+
+            // Create the uber mesh that will hold our merged submeshes
+            Mesh newParentMesh = new Mesh();
+            List<Material> matList = new List<Material>();
+            List<CombineInstance> combineForParent = new List<CombineInstance>();
+
+            // For each of our newly combined submeshes, we need to create a CombineInstance to be added to the final parent
+            foreach (var pair in submeshes)
+            {
+                CombineInstance c = new CombineInstance();
+                c.mesh = pair.Value;
+                combineForParent.Add(c);
+                matList.Add(pair.Key);
+            }
+
+            // Final combine into uber mesh
+            newParentMesh.CombineMeshes(combineForParent.ToArray(), false, false, false);
+
+            // Create a new GO that with a MeshFilter that will reference our new uber mesh
+            var newObject = new GameObject("Combined: " + string.Join(",", names.ToArray()));
             var mf = newObject.AddComponent<MeshFilter>();
-            mf.mesh = new Mesh();
-            mf.sharedMesh.CombineMeshes(combine.ToArray(), false, true, false);
+            newParentMesh.name = newObject.name;
+            mf.mesh = newParentMesh;
+
+            // Create the uber mesh's MeshRenderer, and add the material for each new submesh
             var mr = newObject.AddComponent<MeshRenderer>();
             mr.materials = matList.ToArray();
             mf.sharedMesh.RecalculateBounds();
 
+            // Make sure the new mesh is at the same location as the old mesh
             var newCenter = mr.bounds.center;
-
             var newVertices = mf.sharedMesh.vertices;
             for( int i = 0; i < newVertices.Length; i++)
             {
-                newVertices[i] -= newCenter;
+                newVertices[i] -= newCenter; // Ofset the verts in the mesh to the original location
             }
             mf.sharedMesh.vertices = newVertices;
             mf.sharedMesh.RecalculateBounds();
-
             newObject.transform.position = newCenter;
 
+            // If there was only one parent GameObject that we combined, parent the new GO to the same place in the hierarchy
             if( Selection.objects.Length == 1)
             {
                 GameObject singleObject = Selection.objects[0] as GameObject;
                 newObject.transform.parent = singleObject.transform.parent;
+            } else
+            {
+                // We don't know how to choose where to parent something that came from lots of meshes, so leave the new GO at the root
             }
-            
-            foreach( var o in originalObjects)
+
+            // Create a prefab and mesh asset out of what we've made
+            var newObjectAsPrefab = SaveCombined(outputFolder, newObject, mf);
+
+            // Deactivate the old mesh objects
+            foreach ( var o in originalObjects)
             {
                 o.SetActive(false);
             }
 
+            // Destroy the temp GOs we created when we broke complex meshes into bits
             foreach (var o in toDestroy)
             {
                 GameObject.DestroyImmediate(o);
             }
+
+            // Select the new GO in the hierarchy
+            Selection.SetActiveObjectWithContext(newObjectAsPrefab, newObjectAsPrefab);
         }
     }
-    
-    private static void DoCombine(MeshFilter filter, List<Material> matList, List<CombineInstance> combineList)
+
+    // Pick a folder to store our new assets
+    private static string ChooseFolder(Mesh mesh)
     {
-        matList.AddRange(filter.gameObject.GetComponent<MeshRenderer>().sharedMaterials);
+        string outputFolderPath = EditorPrefs.GetString(sLastFolderPath);
+        string outputFolderName = EditorPrefs.GetString(sLastFolderName);
+        string[] objectZeroPath = null;
+
+        // If we haven't stored the last used folder path and name, use the mesh's current project path
+        if (string.IsNullOrEmpty(outputFolderPath))
+        {
+            objectZeroPath = AssetDatabase.GetAssetPath(mesh).Split('/');
+            outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 2);
+            outputFolderName = objectZeroPath[objectZeroPath.Length - 2];
+        }
+        
+        string outputFolder = EditorUtility.OpenFolderPanel("Select Combined Mesh Asset Location", outputFolderPath, outputFolderName);
+        if (string.IsNullOrEmpty(outputFolder))
+            return null;
+
+        int assetsSubstrIndex = outputFolder.IndexOf("Assets");
+        outputFolder = outputFolder.Substring(assetsSubstrIndex, outputFolder.Length - assetsSubstrIndex);
+
+        // Update the editor prefs with the user's selection, so we can remember it for next time
+        objectZeroPath = outputFolder.Split('/');
+        outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 1);
+        outputFolderName = objectZeroPath[objectZeroPath.Length - 1];
+        EditorPrefs.SetString(sLastFolderPath, outputFolderPath);
+        EditorPrefs.SetString(sLastFolderName, outputFolderName);
+
+        if (!System.IO.Directory.Exists(outputFolder))
+        {
+            System.IO.Directory.CreateDirectory(outputFolder);
+        }
+
+        return outputFolder;
+    }
+
+    // Sanitize the file name from the GO name
+    private static string ProcessName(string name)
+    {
+        return name.Replace(":", "").Replace(" ", "_").Replace(",","_");
+    }
+
+    // Store the new GO and mesh data to assets, link as prefab
+    private static GameObject SaveCombined(string outputFolder, GameObject newObject, MeshFilter mesh)
+    {
+        var currentScene = EditorSceneManager.GetActiveScene();
+        EditorSceneManager.MarkSceneDirty(currentScene);
+
+        string outputFileName = ProcessName(newObject.name);
+
+        // If the file exists, keep tacking a number onto the end until we find a filename that is not in use
+        int fileTestCounter = 1;
+        string tempName = outputFileName;
+        while( System.IO.File.Exists(outputFolder + "/" + tempName+".prefab") )
+        {
+            tempName = outputFileName + "-" + fileTestCounter++;
+        }
+
+        string prefabPath = outputFolder + "/" + tempName + ".prefab";
+        string meshPath = outputFolder + "/" + tempName + ".asset";
+
+        AssetDatabase.CreateAsset(mesh.sharedMesh, meshPath);
+        PrefabUtility.CreatePrefab(prefabPath, newObject);
+        AssetDatabase.SaveAssets();
+
+        return PrefabUtility.ConnectGameObjectToPrefab(newObject, AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath));
+    }
+    
+    // Bucket the submeshes by material, so we can do a merge combine later
+    private static Material DoCombine(MeshFilter filter, Dictionary<Material, MaterialAndCombines> buckets)
+    {
+        Material mat = filter.gameObject.GetComponent<MeshRenderer>().sharedMaterial;
 
         CombineInstance c = new CombineInstance();
         c.mesh = filter.sharedMesh;
         c.transform = filter.gameObject.transform.localToWorldMatrix;
-        combineList.Add(c);
+
+        MaterialAndCombines combineSet;
+        if (!buckets.TryGetValue(mat, out combineSet))
+        {
+            combineSet = new MaterialAndCombines();
+            combineSet.mat = mat;
+            buckets[mat] = combineSet;
+        }
+
+        combineSet.list.Add(c);
+
+        return mat;
     }
 
     [MenuItem("MeshTools/Break")]
@@ -118,6 +271,7 @@ public class MeshCombine {
         go.SetActive(false);
     }
 
+    // For each submesh, create a new mesh and make sure they exist in the same position in world space
     public static List<MeshFilter> BreakMeshIntoBits( GameObject o )
     {
         List<MeshFilter> newMeshBits = new List<MeshFilter>();  
