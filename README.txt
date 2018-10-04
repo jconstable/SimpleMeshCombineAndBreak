@@ -11,3 +11,9 @@ Usage:
 	Break
 		Select a GameObject with a single MeshFilter, and use the MeshTools->Break menu item 
 		From script, call MeshTools.SimpleMeshCombine.BreakMesh()
+
+Todo:
+	Change menu to a window, to expose options like:
+		- Option to save to assets in the project, or embed in scene
+		- Option to perform submesh merge, or leave submeshes as individual submeshes
+		- Option to preserve lightmaps
