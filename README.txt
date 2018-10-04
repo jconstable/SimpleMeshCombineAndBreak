@@ -7,7 +7,7 @@ This script currently merges meshes that use the same material. Combine will add
 Usage:
 	Combine
 		Select multiple GameObjects from your scene hierarchy and use the MeshTools->Combine menu item
-		From script, call SimmpleMeshCombine.CombineMeshes()
+		From script, call MeshTools.SimmpleMeshCombine.CombineMeshes()
 	Break
 		Select a GameObject with a single MeshFilter, and use the MeshTools->Break menu item 
-		From script, call SimpleMeshCombine.BreakMesh()
+		From script, call MeshTools.SimpleMeshCombine.BreakMesh()
