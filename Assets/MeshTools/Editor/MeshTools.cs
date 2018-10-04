@@ -2,25 +2,88 @@
 // Use freely, but please send pull requests with enhancements!
 // https://github.com/jconstable/SimpleMeshCombineAndBreak
 
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 
-public class MeshCombine {
+public class SimmpleMeshCombine {
+
+    // Editor Prefs keys
+    private static string sLastFolderPath = "MESH_COMBINE_KEY_LAST_FOLDER_PATH";
+    private static string sLastFolderName = "MESH_COMBINE_KEY_LAST_FOLDER_NAME";
+
+    [MenuItem("MeshTools/Combine")]
+    protected static void MenuItemDoCombine()
+    {
+        List<GameObject> objects = new List<GameObject>();
+        foreach (var o in Selection.objects)
+        {
+            var go = o as GameObject;
+            if (go != null)
+            {
+                objects.Add(go);
+            }
+        }
+
+        if( objects.Count == 0 )
+        {
+            Debug.Log("No suitable objects found to combine");
+            return;
+        }
+
+        // Pick where these new assets will be put
+        string outputFolder = ChooseFolder(objects[0]);
+        if (string.IsNullOrEmpty(outputFolder))
+            return;
+
+        var combined = CombineMeshes(objects);
+
+        // Create a prefab and mesh asset out of what we've made
+        var newObjectAsPrefab = SaveCombined(outputFolder, combined, combined.GetComponent<MeshFilter>());
+
+        if (newObjectAsPrefab != null )
+        {
+            // Select the new GO in the hierarchy
+            Selection.SetActiveObjectWithContext(newObjectAsPrefab, newObjectAsPrefab);
+        }
+    }
+
+    [MenuItem("MeshTools/Break")]
+    protected static void MenuItemDoBreak()
+    {
+        if (Selection.objects.Length != 1)
+        {
+            Debug.LogError("Exactly one combined mesh must be selected in the hierarchy");
+            return;
+        }
+
+        var go = Selection.objects[0] as GameObject;
+
+        // Pick where these new assets will be put
+        string outputFolder = ChooseFolder(go);
+        if (string.IsNullOrEmpty(outputFolder))
+            return;
+
+        var resultingObjects = BreakMesh(go);
+        go.SetActive(false);
+
+        foreach (var r in resultingObjects)
+        {
+            SaveCombined(outputFolder, r.gameObject, r);
+        }
+    }
+
+    // Container class for bucketing by material
     private class MaterialAndCombines
     {
         public Material mat;
         public List<CombineInstance> list = new List<CombineInstance>();
     }
 
-    private static string sLastFolderPath = "MESH_COMBINE_KEY_LAST_FOLDER_PATH";
-    private static string sLastFolderName = "MESH_COMBINE_KEY_LAST_FOLDER_NAME";
-
-    [MenuItem("MeshTools/Combine")]
-    public static void DoCombine()
-    {
+    // Do the work of combining meshes
+    public static GameObject CombineMeshes(List<GameObject> objects)
+    { 
         List<MeshFilter> meshes = new List<MeshFilter>();
         List<GameObject> originalObjects = new List<GameObject>();
 
@@ -31,7 +94,7 @@ public class MeshCombine {
             if( go == null )
             {
                 Debug.LogError("Selected object is not a GameObject!");
-                return;
+                return null;
             }
 
             // Collect the MeshFilters in each GameObject
@@ -42,7 +105,7 @@ public class MeshCombine {
             } else
             {
                 Debug.LogError("Selected object " + go.name + " does not have a MeshFilter!");
-                return;
+                return null;
             }
 
             originalObjects.Add(go);
@@ -51,11 +114,6 @@ public class MeshCombine {
         // Only run if we found MeshFilters from selection
         if( meshes.Count  >0)
         {
-            // Pick where these new assets will be put
-            string outputFolder = ChooseFolder(meshes[0].sharedMesh);
-            if (string.IsNullOrEmpty(outputFolder))
-                return;
-
             // Data structure to store source information as we go
             List<string> names = new List<string>();
             List<GameObject> toDestroy = new List<GameObject>();
@@ -74,7 +132,7 @@ public class MeshCombine {
                 {
                     // We need to isolate all submeshes into discreet Mesh objects.
                     // Use the BreakMeshIntoBits function to create temporary GameObjects with one mesh each
-                    var newObjects = BreakMeshIntoBits(filter.gameObject);
+                    var newObjects = BreakMesh(filter.gameObject);
                     foreach( var o in newObjects )
                     {
                         DoCombine(o, combinesByMaterial);
@@ -146,9 +204,6 @@ public class MeshCombine {
                 // We don't know how to choose where to parent something that came from lots of meshes, so leave the new GO at the root
             }
 
-            // Create a prefab and mesh asset out of what we've made
-            var newObjectAsPrefab = SaveCombined(outputFolder, newObject, mf);
-
             // Deactivate the old mesh objects
             foreach ( var o in originalObjects)
             {
@@ -161,13 +216,14 @@ public class MeshCombine {
                 GameObject.DestroyImmediate(o);
             }
 
-            // Select the new GO in the hierarchy
-            Selection.SetActiveObjectWithContext(newObjectAsPrefab, newObjectAsPrefab);
+            return newObject;
         }
+
+        return null;
     }
 
     // Pick a folder to store our new assets
-    private static string ChooseFolder(Mesh mesh)
+    private static string ChooseFolder(Object mesh)
     {
         string outputFolderPath = EditorPrefs.GetString(sLastFolderPath);
         string outputFolderName = EditorPrefs.GetString(sLastFolderName);
@@ -176,12 +232,19 @@ public class MeshCombine {
         // If we haven't stored the last used folder path and name, use the mesh's current project path
         if (string.IsNullOrEmpty(outputFolderPath))
         {
-            objectZeroPath = AssetDatabase.GetAssetPath(mesh).Split('/');
-            outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 2);
-            outputFolderName = objectZeroPath[objectZeroPath.Length - 2];
+            string path = AssetDatabase.GetAssetPath(mesh);
+            if (string.IsNullOrEmpty(path))
+            {
+                outputFolderPath = Application.dataPath;
+                outputFolderName = "CombinedMeshes";
+            } else {
+                objectZeroPath = path.Split('/');
+                outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 2);
+                outputFolderName = objectZeroPath[objectZeroPath.Length - 2];
+            }
         }
         
-        string outputFolder = EditorUtility.OpenFolderPanel("Select Combined Mesh Asset Location", outputFolderPath, outputFolderName);
+        string outputFolder = EditorUtility.OpenFolderPanel("Select Destination Mesh Asset Location", outputFolderPath, outputFolderName);
         if (string.IsNullOrEmpty(outputFolder))
             return null;
 
@@ -257,22 +320,8 @@ public class MeshCombine {
         return mat;
     }
 
-    [MenuItem("MeshTools/Break")]
-    public static void BreakMesh()
-    {
-        if (Selection.objects.Length != 1)
-        {
-            Debug.LogError("Exactly one combined mesh must be selected in the hierarchy");
-            return;
-        }
-
-        var go = Selection.objects[0] as GameObject;
-        BreakMeshIntoBits(go);
-        go.SetActive(false);
-    }
-
     // For each submesh, create a new mesh and make sure they exist in the same position in world space
-    public static List<MeshFilter> BreakMeshIntoBits( GameObject o )
+    public static List<MeshFilter> BreakMesh( GameObject o )
     {
         List<MeshFilter> newMeshBits = new List<MeshFilter>();  
 
@@ -287,8 +336,8 @@ public class MeshCombine {
         Vector2[] uv3 = mf.sharedMesh.uv3;
         Vector2[] uv4 = mf.sharedMesh.uv4;
         Vector3[] normals = mf.sharedMesh.normals;
-
-        for( int i = 0; i < mf.sharedMesh.subMeshCount; i++ )
+        
+        for ( int i = 0; i < mf.sharedMesh.subMeshCount; i++ )
         {
             int[] indices = mf.sharedMesh.GetIndices(i);
             Dictionary<int, int> remap = new Dictionary<int, int>();
