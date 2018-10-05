@@ -20,11 +20,13 @@ namespace MeshTools
         protected static void MenuItemDoCombine()
         {
             List<GameObject> objects = new List<GameObject>();
+            bool makeStatic = true;
             foreach (var o in Selection.objects)
             {
                 var go = o as GameObject;
                 if (go != null)
                 {
+                    makeStatic &= go.isStatic;
                     objects.Add(go);
                 }
             }
@@ -44,6 +46,12 @@ namespace MeshTools
 
             // Create a prefab and mesh asset out of what we've made
             var newObjectAsPrefab = SaveCombined(outputFolder, combined, combined.GetComponent<MeshFilter>());
+
+            // If all objects that were selected are static, make the new one static
+            if( makeStatic )
+            {
+                newObjectAsPrefab.isStatic = makeStatic;
+            }
 
             if (newObjectAsPrefab != null)
             {
@@ -73,7 +81,11 @@ namespace MeshTools
 
             foreach (var r in resultingObjects)
             {
-                SaveCombined(outputFolder, r.gameObject, r);
+                var newGO = SaveCombined(outputFolder, r.gameObject, r);
+                if( go.isStatic )
+                {
+                    newGO.isStatic = true;
+                }
             }
         }
 
@@ -178,7 +190,8 @@ namespace MeshTools
                 newParentMesh.CombineMeshes(combineForParent.ToArray(), false, false, false);
 
                 // Create a new GO that with a MeshFilter that will reference our new uber mesh
-                var newObject = new GameObject("Combined: " + string.Join(",", names.ToArray()));
+                var nameParts = names.GetRange(0, Mathf.Min(4, names.Count)).ToArray();
+                var newObject = new GameObject("Combined: " + string.Join(",", nameParts) + (nameParts.Length < names.Count ? "..." : ""));
                 var mf = newObject.AddComponent<MeshFilter>();
                 newParentMesh.name = newObject.name;
                 mf.mesh = newParentMesh;
@@ -391,6 +404,7 @@ namespace MeshTools
 
                 GameObject n = new GameObject(o.name + " submesh " + i);
                 n.transform.position = Vector3.zero;
+                n.transform.rotation = mf.gameObject.transform.rotation;
 
                 var newMF = n.AddComponent<MeshFilter>();
                 newMF.mesh = m;
