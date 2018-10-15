@@ -11,84 +11,6 @@ namespace MeshTools
 {
     public class SimmpleMeshCombine
     {
-
-        // Editor Prefs keys
-        private static string sLastFolderPath = "MESH_COMBINE_KEY_LAST_FOLDER_PATH";
-        private static string sLastFolderName = "MESH_COMBINE_KEY_LAST_FOLDER_NAME";
-
-        [MenuItem("MeshTools/Combine")]
-        protected static void MenuItemDoCombine()
-        {
-            List<GameObject> objects = new List<GameObject>();
-            bool makeStatic = true;
-            foreach (var o in Selection.objects)
-            {
-                var go = o as GameObject;
-                if (go != null)
-                {
-                    makeStatic &= go.isStatic;
-                    objects.Add(go);
-                }
-            }
-
-            if (objects.Count == 0)
-            {
-                Debug.Log("No suitable objects found to combine");
-                return;
-            }
-
-            // Pick where these new assets will be put
-            string outputFolder = ChooseFolder(objects[0]);
-            if (string.IsNullOrEmpty(outputFolder))
-                return;
-
-            var combined = CombineMeshes(objects);
-
-            // Create a prefab and mesh asset out of what we've made
-            var newObjectAsPrefab = SaveCombined(outputFolder, combined, combined.GetComponent<MeshFilter>());
-
-            // If all objects that were selected are static, make the new one static
-            if( makeStatic )
-            {
-                newObjectAsPrefab.isStatic = makeStatic;
-            }
-
-            if (newObjectAsPrefab != null)
-            {
-                // Select the new GO in the hierarchy
-                Selection.SetActiveObjectWithContext(newObjectAsPrefab, newObjectAsPrefab);
-            }
-        }
-
-        [MenuItem("MeshTools/Break")]
-        protected static void MenuItemDoBreak()
-        {
-            if (Selection.objects.Length != 1)
-            {
-                Debug.LogError("Exactly one combined mesh must be selected in the hierarchy");
-                return;
-            }
-
-            var go = Selection.objects[0] as GameObject;
-
-            // Pick where these new assets will be put
-            string outputFolder = ChooseFolder(go);
-            if (string.IsNullOrEmpty(outputFolder))
-                return;
-
-            var resultingObjects = BreakMesh(go);
-            go.SetActive(false);
-
-            foreach (var r in resultingObjects)
-            {
-                var newGO = SaveCombined(outputFolder, r.gameObject, r);
-                if( go.isStatic )
-                {
-                    newGO.isStatic = true;
-                }
-            }
-        }
-
         // Container class for bucketing by material
         private class MaterialAndCombines
         {
@@ -168,8 +90,14 @@ namespace MeshTools
                 foreach (var pair in combinesByMaterial)
                 {
                     var mesh = new Mesh();
-                    mesh.CombineMeshes(pair.Value.list.ToArray(), true, true, false); // 2nd arg means to actually "weld" meshes
+                    var list = pair.Value.list;
+                    mesh.CombineMeshes(list.ToArray(), true, false, false); // 2nd arg means to actually "weld" meshes
                     submeshes[pair.Value.mat] = mesh;
+
+                    foreach (var combine in list)
+                    {
+                        GameObject.DestroyImmediate(combine.mesh);
+                    }
                 }
 
                 // Create the uber mesh that will hold our merged submeshes
@@ -241,92 +169,34 @@ namespace MeshTools
             return null;
         }
 
-        // Pick a folder to store our new assets
-        private static string ChooseFolder(Object mesh)
+        private static void ScaleMesh(MeshRenderer rend, Mesh mesh)
         {
-            string outputFolderPath = EditorPrefs.GetString(sLastFolderPath);
-            string outputFolderName = EditorPrefs.GetString(sLastFolderName);
-            string[] objectZeroPath = null;
-
-            // If we haven't stored the last used folder path and name, use the mesh's current project path
-            if (string.IsNullOrEmpty(outputFolderPath))
+            var verts = mesh.vertices;
+            GameObject o = new GameObject();
+            o.transform.position = rend.transform.position;
+            o.transform.localScale = rend.transform.lossyScale;
+            o.transform.rotation = rend.transform.rotation;
+            for (int i = 0; i < verts.Length; i++)
             {
-                string path = AssetDatabase.GetAssetPath(mesh);
-                if (string.IsNullOrEmpty(path))
-                {
-                    outputFolderPath = Application.dataPath;
-                    outputFolderName = "CombinedMeshes";
-                }
-                else
-                {
-                    objectZeroPath = path.Split('/');
-                    outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 2);
-                    outputFolderName = objectZeroPath[objectZeroPath.Length - 2];
-                }
+                
+                verts[i] = o.transform.TransformPoint(verts[i]);// - rend.transform.position;
+                
             }
-
-            string outputFolder = EditorUtility.OpenFolderPanel("Select Destination Mesh Asset Location", outputFolderPath, outputFolderName);
-            if (string.IsNullOrEmpty(outputFolder))
-                return null;
-
-            int assetsSubstrIndex = outputFolder.IndexOf("Assets");
-            outputFolder = outputFolder.Substring(assetsSubstrIndex, outputFolder.Length - assetsSubstrIndex);
-
-            // Update the editor prefs with the user's selection, so we can remember it for next time
-            objectZeroPath = outputFolder.Split('/');
-            outputFolderPath = string.Join("/", objectZeroPath, 0, objectZeroPath.Length - 1);
-            outputFolderName = objectZeroPath[objectZeroPath.Length - 1];
-            EditorPrefs.SetString(sLastFolderPath, outputFolderPath);
-            EditorPrefs.SetString(sLastFolderName, outputFolderName);
-
-            if (!System.IO.Directory.Exists(outputFolder))
-            {
-                System.IO.Directory.CreateDirectory(outputFolder);
-            }
-
-            return outputFolder;
+            mesh.vertices = verts;
+            GameObject.DestroyImmediate(o);
         }
 
-        // Sanitize the file name from the GO name
-        private static string ProcessName(string name)
-        {
-            return name.Replace(":", "").Replace(" ", "_").Replace(",", "_");
-        }
-
-        // Store the new GO and mesh data to assets, link as prefab
-        private static GameObject SaveCombined(string outputFolder, GameObject newObject, MeshFilter mesh)
-        {
-            var currentScene = EditorSceneManager.GetActiveScene();
-            EditorSceneManager.MarkSceneDirty(currentScene);
-
-            string outputFileName = ProcessName(newObject.name);
-
-            // If the file exists, keep tacking a number onto the end until we find a filename that is not in use
-            int fileTestCounter = 1;
-            string tempName = outputFileName;
-            while (System.IO.File.Exists(outputFolder + "/" + tempName + ".prefab"))
-            {
-                tempName = outputFileName + "-" + fileTestCounter++;
-            }
-
-            string prefabPath = outputFolder + "/" + tempName + ".prefab";
-            string meshPath = outputFolder + "/" + tempName + ".asset";
-
-            AssetDatabase.CreateAsset(mesh.sharedMesh, meshPath);
-            PrefabUtility.CreatePrefab(prefabPath, newObject);
-            AssetDatabase.SaveAssets();
-
-            return PrefabUtility.ConnectGameObjectToPrefab(newObject, AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath));
-        }
-
+        
         // Bucket the submeshes by material, so we can do a merge combine later
         private static Material DoCombine(MeshFilter filter, Dictionary<Material, MaterialAndCombines> buckets)
         {
-            Material mat = filter.gameObject.GetComponent<MeshRenderer>().sharedMaterial;
+            MeshRenderer rend = filter.gameObject.GetComponent<MeshRenderer>();
+            Material mat = rend.sharedMaterial;
 
             CombineInstance c = new CombineInstance();
-            c.mesh = filter.sharedMesh;
+            c.mesh = GameObject.Instantiate(filter.sharedMesh);
             c.transform = filter.gameObject.transform.localToWorldMatrix;
+            ScaleMesh(rend, c.mesh);
 
             MaterialAndCombines combineSet;
             if (!buckets.TryGetValue(mat, out combineSet))
@@ -335,7 +205,7 @@ namespace MeshTools
                 combineSet.mat = mat;
                 buckets[mat] = combineSet;
             }
-
+            
             combineSet.list.Add(c);
 
             return mat;
@@ -405,6 +275,7 @@ namespace MeshTools
                 GameObject n = new GameObject(o.name + " submesh " + i);
                 n.transform.position = Vector3.zero;
                 n.transform.rotation = mf.gameObject.transform.rotation;
+                n.transform.localScale = mf.gameObject.transform.localScale;
 
                 var newMF = n.AddComponent<MeshFilter>();
                 newMF.mesh = m;
