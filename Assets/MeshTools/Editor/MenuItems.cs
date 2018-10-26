@@ -83,36 +83,7 @@ namespace MeshTools
                 }
             }
         }
-
-        [MenuItem("MeshTools/Simplify")]
-        protected static void MenuItemDoSimplify()
-        {
-            if (Selection.objects.Length != 1)
-            {
-                EditorUtility.DisplayDialog("Error", "Exactly one mesh must be selected for simplification.", "Ok");
-                return;
-            }
-
-            var go = Selection.objects[0] as GameObject;
-            var mf = go.GetComponent<MeshFilter>();
-
-            if( mf == null )
-            {
-                EditorUtility.DisplayDialog("Error", "Selected object has no MeshFilter.", "Ok");
-                return;
-            }
-
-            InputPromptPopup.Init("Enter a simplification tolerance (in meters)", (w) =>
-            {
-                MeshSimplify.SnapToGrid(mf.sharedMesh, w.value);
-                MeshSimplify.Simplify(mf.sharedMesh);
-                EditorUtility.DisplayDialog("Success", "Mesh has been simplified. You must save this object to a new prefab to persist changes outside of this scene.", "Ok");
-            });
-        }
-            
-            
-
-            
+        
 
         // Pick a folder to store our new assets
         private static string ChooseFolder(Object mesh)
